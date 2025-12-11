@@ -1,0 +1,5 @@
+# Format: username:password
+# Add your accounts here, one per line
+user1:password123
+user2:pass456
+test:testpass
