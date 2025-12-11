@@ -1,32 +1,193 @@
-const fs = require('fs');
+const fs = require('fs').promises;
 const { chromium } = require('playwright');
+const path = require('path');
 
-(async () => {
-  // 1. Read accounts and proxies from your folders
-  const accounts = fs.readFileSync('./accounts/accounts.txt', 'utf-8').split('\n').filter(line => line.trim());
-  const proxies = fs.readFileSync('./proxies/proxies.txt', 'utf-8').split('\n').filter(line => line.trim());
+// Configuration
+const CONFIG = {
+  timeout: 30000, // 30 seconds timeout
+  headless: true, // Set to false for debugging
+  resultsFile: './results.txt'
+};
 
-  for (let i = 0; i < accounts.length; i++) {
-    const [username, password] = accounts[i].split(':');
-    const proxyConfig = parseProxy(proxies[i % proxies.length]); // Rotate proxies
-
-    // 2. Launch browser with proxy
-    const browser = await chromium.launch({
-      headless: true,
-      proxy: { server: `http://${proxyConfig.ip}:${proxyConfig.port}` }
-    });
-
-    // 3. Your logic to check the account (this is a placeholder)
-    const page = await browser.newPage();
-    // ... navigate to a site, attempt login, check for success ...
-    console.log(`Checked ${username}`);
-
-    await browser.close();
+class AccountChecker {
+  constructor() {
+    this.accounts = [];
+    this.proxies = [];
+    this.results = [];
   }
-})();
 
-function parseProxy(proxyString) {
-  // Simple parsing logic
-  const parts = proxyString.split(':');
-  return { ip: parts[0], port: parts[1] };
+  async loadFiles() {
+    try {
+      // Load accounts
+      const accountsData = await fs.readFile(
+        path.join(__dirname, '../accounts/accounts.txt'), 
+        'utf-8'
+      );
+      this.accounts = accountsData
+        .split('\n')
+        .filter(line => line.trim() && !line.startsWith('#'))
+        .map(line => {
+          const [username, password] = line.split(':');
+          return { username: username?.trim(), password: password?.trim() };
+        })
+        .filter(acc => acc.username && acc.password);
+
+      // Load proxies
+      const proxiesData = await fs.readFile(
+        path.join(__dirname, '../proxies/proxies.txt'), 
+        'utf-8'
+      );
+      this.proxies = proxiesData
+        .split('\n')
+        .filter(line => line.trim() && !line.startsWith('#'))
+        .map(line => {
+          const parts = line.split(':');
+          if (parts.length === 2) {
+            return { server: `http://${parts[0]}:${parts[1]}` };
+          } else if (parts.length === 4) {
+            return {
+              server: `http://${parts[0]}:${parts[1]}`,
+              username: parts[2],
+              password: parts[3]
+            };
+          }
+          return null;
+        })
+        .filter(proxy => proxy !== null);
+
+      console.log(`✅ Loaded ${this.accounts.length} accounts and ${this.proxies.length} proxies`);
+    } catch (error) {
+      console.error('❌ Error loading files:', error.message);
+      process.exit(1);
+    }
+  }
+
+  async checkAccount(account, proxyIndex) {
+    let browser = null;
+    const startTime = Date.now();
+
+    try {
+      const launchOptions = {
+        headless: CONFIG.headless,
+        timeout: CONFIG.timeout
+      };
+
+      // Add proxy if available
+      if (this.proxies.length > 0) {
+        const proxy = this.proxies[proxyIndex % this.proxies.length];
+        launchOptions.proxy = proxy;
+      }
+
+      // Launch browser
+      browser = await chromium.launch(launchOptions);
+      const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      });
+      const page = await context.newPage();
+
+      // ============================
+      // ADD YOUR CHECKING LOGIC HERE
+      // ============================
+      
+      // Example 1: Check if a website is accessible
+      console.log(`🔍 Checking ${account.username}...`);
+      
+      // Go to a test website (replace with your target)
+      const response = await page.goto('https://httpbin.org/ip', {
+        waitUntil: 'networkidle',
+        timeout: 15000
+      });
+
+      if (!response.ok()) {
+        throw new Error(`HTTP ${response.status()}`);
+      }
+
+      // Example 2: Simple form login check (customize this)
+      /*
+      await page.goto('https://example.com/login');
+      await page.fill('#username', account.username);
+      await page.fill('#password', account.password);
+      await page.click('#login-button');
+      
+      // Check for success
+      const success = await page.waitForSelector('.welcome-message', { timeout: 5000 })
+        .then(() => true)
+        .catch(() => false);
+      */
+
+      const responseTime = Date.now() - startTime;
+      const result = {
+        username: account.username,
+        status: '✅ VALID',
+        proxyUsed: this.proxies.length > 0 ? proxyIndex + 1 : 'None',
+        responseTime: `${responseTime}ms`,
+        timestamp: new Date().toISOString()
+      };
+
+      console.log(`${result.username} - ${result.status} (${result.responseTime})`);
+      return result;
+
+    } catch (error) {
+      const responseTime = Date.now() - startTime;
+      const result = {
+        username: account.username,
+        status: '❌ FAILED',
+        error: error.message,
+        proxyUsed: this.proxies.length > 0 ? proxyIndex + 1 : 'None',
+        responseTime: `${responseTime}ms`,
+        timestamp: new Date().toISOString()
+      };
+
+      console.log(`${result.username} - ${result.status}: ${error.message}`);
+      return result;
+    } finally {
+      if (browser) {
+        await browser.close();
+      }
+    }
+  }
+
+  async saveResults() {
+    try {
+      const output = this.results.map(r => 
+        `${r.timestamp} | ${r.username} | ${r.status} | ${r.responseTime} | Proxy: ${r.proxyUsed}${r.error ? ` | Error: ${r.error}` : ''}`
+      ).join('\n');
+
+      await fs.writeFile(CONFIG.resultsFile, output, 'utf-8');
+      console.log(`\n📊 Results saved to ${CONFIG.resultsFile}`);
+      console.log(`✅ Valid: ${this.results.filter(r => r.status.includes('VALID')).length}`);
+      console.log(`❌ Failed: ${this.results.filter(r => r.status.includes('FAILED')).length}`);
+    } catch (error) {
+      console.error('Error saving results:', error);
+    }
+  }
+
+  async run() {
+    console.log('🚀 Starting Account Checker...\n');
+    await this.loadFiles();
+
+    if (this.accounts.length === 0) {
+      console.log('No accounts found. Add accounts to accounts/accounts.txt');
+      return;
+    }
+
+    // Check each account
+    for (let i = 0; i < this.accounts.length; i++) {
+      const result = await this.checkAccount(this.accounts[i], i);
+      this.results.push(result);
+      
+      // Add delay between checks to avoid rate limiting
+      if (i < this.accounts.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+
+    await this.saveResults();
+  }
 }
+
+// Run the checker
+(async () => {
+  const checker = new AccountChecker();
+  await checker.run();
+})();
