@@ -1,0 +1,32 @@
+const fs = require('fs');
+const { chromium } = require('playwright');
+
+(async () => {
+  // 1. Read accounts and proxies from your folders
+  const accounts = fs.readFileSync('./accounts/accounts.txt', 'utf-8').split('\n').filter(line => line.trim());
+  const proxies = fs.readFileSync('./proxies/proxies.txt', 'utf-8').split('\n').filter(line => line.trim());
+
+  for (let i = 0; i < accounts.length; i++) {
+    const [username, password] = accounts[i].split(':');
+    const proxyConfig = parseProxy(proxies[i % proxies.length]); // Rotate proxies
+
+    // 2. Launch browser with proxy
+    const browser = await chromium.launch({
+      headless: true,
+      proxy: { server: `http://${proxyConfig.ip}:${proxyConfig.port}` }
+    });
+
+    // 3. Your logic to check the account (this is a placeholder)
+    const page = await browser.newPage();
+    // ... navigate to a site, attempt login, check for success ...
+    console.log(`Checked ${username}`);
+
+    await browser.close();
+  }
+})();
+
+function parseProxy(proxyString) {
+  // Simple parsing logic
+  const parts = proxyString.split(':');
+  return { ip: parts[0], port: parts[1] };
+}
