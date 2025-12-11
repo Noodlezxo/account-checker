@@ -1,0 +1,5 @@
+# Format: ip:port OR ip:port:username:password
+# HTTP/HTTPS proxies work best with Playwright
+192.168.1.100:8080
+45.76.89.12:3128
+proxy.example.com:8080:proxyuser:proxypass
